@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Chequeo de Flota</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Barra de navegación: se arma sola según el usuario (armarNav) -->
+  <nav id="nav" class="hide"></nav>
+  <main>
+    <!-- ===== LOGIN / REGISTRO ===== -->
+    <div id="login" class="card">
+      <h2>Chequeo de Flota</h2>
+      <label>DNI</label>
+      <input id="dni" inputmode="numeric">
+      <label>Contraseña</label>
+      <input id="pass" type="password">
+      <button class="b" onclick="entrar()">Iniciar sesión</button>
+      <button class="b g" onclick="registrar()">Registrarme</button>
+      <p id="msg" class="no"></p>
+      <hr>
+      <button class="l" onclick="admin()">Admin panel</button>
+    </div>
+    <!-- ===== PASO 1: datos del vehículo ===== -->
+    <div id="p1" class="card hide">
+      <h2>Cargar vehículo</h2>
+      <label>DNI conductor</label>
+      <input id="vdni" disabled>
+      <label>Patente</label>
+      <input id="pat" placeholder="AB123CD">
+      <label>Kilometraje</label>
+      <input id="km" type="number">
+      <label>Fecha y hora</label>
+      <input id="fh" disabled>
+      <button class="b" onclick="guardarDatos()">Guardar datos y continuar</button>
+    </div>
+    <!-- ===== PASO 2: checklist de ítems ===== -->
+    <div id="p2" class="card hide">
+      <h2>Checklist</h2>
+      <div id="lista"></div>
+      <button class="b" onclick="resumen()">Ver resumen</button>
+    </div>
+    <!-- ===== PASO 3: resumen y guardado ===== -->
+    <div id="p3" class="card hide">
+      <h2>Resumen</h2>
+      <p id="datos"></p>
+      <div id="res"></div>
+      <button class="b g" onclick="mostrar('p2')">Volver</button>
+      <button class="b" onclick="guardarChecklist()">Guardar checklist</button>
+    </div>
+    <!-- ===== HISTORIAL (solo admin) ===== -->
+    <div id="hist" class="card hide">
+      <h2>Historial</h2>
+      <div class="wrap" id="tabla"></div>
+      <button class="b" onclick="csv()">Descargar CSV</button>
+    </div>
+    <!-- ===== ESTADÍSTICAS (solo admin) ===== -->
+    <div id="stats" class="card hide">
+      <h2>Estadísticas</h2>
+      <div id="est"></div>
+    </div>
+  </main>
+<script>
+/* =====================================================================
+   Chequeo de Flota - toda la lógica de la página.
+   Los datos se guardan en el navegador con localStorage.
+   ===================================================================== */
+/* ---------- CONFIGURACIÓN ---------- */
+const ITEMS = [
+  "Luces", "Frenos", "Neumáticos", "Espejos", "Combustible",
+  "Documentación", "Botiquín", "Extintor", "Limpiaparabrisas", "Aceite y agua"
+];
+const PAGES = ["login", "p1", "p2", "p3", "hist", "stats"];
+let user = null, isAdmin = false, cur = {};
+/* ---------- ALMACENAMIENTO ---------- */
+function leer(k) {
+  try { return JSON.parse(localStorage.getItem(k)) || []; }
+  catch (e) { return []; }
+}
+function guardar(k, v) {
+  try { localStorage.setItem(k, JSON.stringify(v)); }
+  catch (e) { /* sin espacio o modo privado: se ignora */ }
+}
+/* ---------- UTILIDADES ---------- */
+const $ = id => document.getElementById(id);
+/* Muestra una sección y oculta todas las demás */
+function mostrar(id) {
+  PAGES.forEach(p => $(p).classList.toggle("hide", p !== id));
+}
+/* ---------- ACCESO Y USUARIOS ---------- */
+function registrar() {
+  const d = $("dni").value.trim(), p = $("pass").value;
+  if (!d || !p) { $("msg").textContent = "Completá DNI y contraseña"; return; }
+  const us = leer("usuarios");
+  if (us.find(u => u.dni === d)) { $("msg").textContent = "Ese DNI ya está registrado"; return; }
+  us.push({ dni: d, pass: p });
+  guardar("usuarios", us);
+  $("msg").textContent = "";
+  entrar();
+}
+function entrar() {
+  const d = $("dni").value.trim(), p = $("pass").value;
+  if (!leer("usuarios").find(u => u.dni === d && u.pass === p)) {
+    $("msg").textContent = "DNI o contraseña incorrectos"; return;
+  }
+  user = d; isAdmin = false;
+  $("msg").textContent = "";
+  armarNav();
+  nueva();
+}
+function admin() {
+  const c = prompt("Contraseña de administrador:");
+  if (c === "admin123") {
+    user = "ADMIN"; isAdmin = true;
+    armarNav();
+    historial();
+  } else if (c !== null) {
+    alert("Contraseña incorrecta");
+  }
+}
+/* Construye los botones de la barra superior según el rol */
+function armarNav() {
+  let h = '<button onclick="nueva()">Nueva checklist</button>';
+  if (isAdmin) {
+    h += '<button onclick="historial()">Historial</button>';
+    h += '<button onclick="estadisticas()">Estadísticas</button>';
+  }
+  h += '<button onclick="salir()">Salir</button>';
+  $("nav").innerHTML = h;
+  $("nav").classList.remove("hide");
+}
+function salir() {
+  user = null; isAdmin = false;
+  $("nav").classList.add("hide");
+  $("dni").value = ""; $("pass").value = "";
+  mostrar("login");
+}
+/* ---------- CHECKLIST (pasos 1 a 3) ---------- */
+/* Paso 1: prepara el formulario y dibuja los ítems a controlar */
+function nueva() {
+  $("vdni").value = user;
+  $("pat").value = "";
+  $("km").value = "";
+  $("fh").value = new Date().toLocaleString("es-AR");
+  cur = {};
+  $("lista").innerHTML = ITEMS.map((n, i) => `
+    <div class="item">
+      <span>${n}</span>
+      <span>
+        <label><input class="mini" type="radio" name="i${i}" value="Sí" checked> Sí</label>
+        <label><input class="mini" type="radio" name="i${i}" value="No"> No</label>
+      </span>
+    </div>`).join("");
+  mostrar("p1");
+}
+function guardarDatos() {
+  const pat = $("pat").value.trim().toUpperCase(), km = $("km").value;
+  if (!pat || !km) { alert("Completá patente y kilometraje"); return; }
+  cur = { dni: user, patente: pat, km: km, fecha: new Date().toLocaleString("es-AR") };
+  mostrar("p2");
+}
+/* Lee la opción elegida de cada ítem: ["Sí","No",...] */
+function valores() {
+  return ITEMS.map((n, i) => document.querySelector(`input[name=i${i}]:checked`).value);
+}
+/* Paso 3: muestra los datos cargados + las respuestas */
+function resumen() {
+  const v = valores();
+  $("datos").innerHTML =
+    `<b>Patente:</b> ${cur.patente}<br>` +
+    `<b>Km:</b> ${cur.km}<br>` +
+    `<b>Fecha:</b> ${cur.fecha}`;
+
+  $("res").innerHTML = ITEMS.map((n, i) =>
+    `<div class="item"><span>${n}</span><span class="${v[i] === "No" ? "no" : ""}">${v[i]}</span></div>`
+  ).join("");
+  mostrar("p3");
+}
+function guardarChecklist() {
+  const h = leer("historial");
+  h.push({ ...cur, items: valores() });
+  guardar("historial", h);
+  alert("Checklist guardada");
+  nueva();   // arranca una checklist nueva
+}
+/* ---------- REPORTES (solo admin) ---------- */
+/* Tabla con todas las checklists guardadas */
+function historial() {
+  const h = leer("historial");
+  if (!h.length) {
+    $("tabla").innerHTML = "<p>Todavía no hay registros.</p>";
+  } else {
+    $("tabla").innerHTML =
+      "<table><tr><th>Fecha</th><th>DNI</th><th>Patente</th><th>Km</th>" +
+      ITEMS.map(n => `<th>${n}</th>`).join("") + "</tr>" +
+      h.map(r =>
+        `<tr><td>${r.fecha}</td><td>${r.dni}</td><td>${r.patente}</td><td>${r.km}</td>` +
+        r.items.map(x => `<td class="${x === "No" ? "no" : ""}">${x}</td>`).join("") +
+        "</tr>"
+      ).join("") +
+      "</table>";
+  }
+  mostrar("hist");
+}
+/* Exporta el historial a un CSV compatible con Excel (; y BOM) */
+function csv() {
+  const h = leer("historial");
+  const filas = [["Fecha", "DNI", "Patente", "Km", ...ITEMS]]
+    .concat(h.map(r => [r.fecha, r.dni, r.patente, r.km, ...r.items]));
+  const texto = filas.map(f => f.map(c => '"' + c + '"').join(";")).join("\n");
+  const a = document.createElement("a");
+  a.href = "data:text/csv;charset=utf-8,\uFEFF" + encodeURIComponent(texto);
+  a.download = "historial_flota.csv";
+  a.click();
+}
+
+/* Totales, porcentaje con fallas y fallas por ítem */
+function estadisticas() {
+  const h = leer("historial");
+  if (!h.length) {
+    $("est").innerHTML = "<p>Todavía no hay datos.</p>";
+    mostrar("stats");
+    return;
+  }
+  const pats = new Set(h.map(r => r.patente)).size;
+  const conFallas = h.filter(r => r.items.includes("No")).length;
+  const pct = Math.round(conFallas / h.length * 100);
+  let t = `<p>Total de checklists: <b>${h.length}</b><br>` +
+          `Vehículos distintos: <b>${pats}</b><br>` +
+          `Checklists con alguna falla: <b>${conFallas}</b> (${pct}%)</p>` +
+          `<h3>Fallas por ítem</h3>`;
+  t += ITEMS.map((n, i) => {
+    const c = h.filter(r => r.items[i] === "No").length;
+    return `<div class="item"><span>${n}</span><span class="${c ? "no" : ""}">${c}</span></div>`;
+  }).join("");
+  $("est").innerHTML = t;
+  mostrar("stats");
+}
+</script>
+</body>
+</html>

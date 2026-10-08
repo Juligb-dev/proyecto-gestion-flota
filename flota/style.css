@@ -1,0 +1,146 @@
+/* =====================================================================
+   Chequeo de Flota - hoja de estilos única
+   Bloques: 1) variables  2) base  3) navegación  4) tarjetas
+            5) formularios 6) botones 7) listas/tablas  8) utilidades
+   ===================================================================== */
+
+/* ---------- 1. VARIABLES DEL TEMA (claro) ---------- */
+:root {
+  --bg:   #f4f4f4;   /* fondo de la página */
+  --card: #ffffff;   /* fondo de las tarjetas */
+  --tx:   #222222;   /* texto general */
+  --bd:   #cccccc;   /* bordes */
+  --ac:   #1a5fb4;   /* acento: navegación y botón principal */
+  --gris: #777777;   /* botón secundario */
+  --no:   #c01c28;   /* estado "falló" / respuesta No */
+}
+/* Tema oscuro automático (sistema operativo) */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:   #1c1c1c;
+    --card: #2a2a2a;
+    --tx:   #eeeeee;
+    --bd:   #555555;
+    --ac:   #62a0ea;
+  }
+}
+/* Tema oscuro forzado por código: <html data-theme="dark"> */
+:root[data-theme="dark"] {
+  --bg:   #1c1c1c;
+  --card: #2a2a2a;
+  --tx:   #eeeeee;
+  --bd:   #555555;
+  --ac:   #62a0ea;
+}
+/* ---------- 2. BASE ---------- */
+/* border-box global: el original lo declaraba en :root y no aplicaba */
+* {
+  box-sizing: border-box;
+}
+html {
+  /* respeta las muescas del notch en iPhone */
+  padding-top:    env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  scroll-padding-top: env(safe-area-inset-top, 0px);
+}
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  color: var(--tx);
+  background: var(--bg);
+}
+/* ---------- 3. NAVEGACIÓN ---------- */
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px;
+  background: var(--ac);
+}
+nav button {
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #000000;
+  cursor: pointer;
+}
+/* ---------- 4. TARJETAS DE CONTENIDO ---------- */
+main {
+  max-width: 520px;
+  margin: 20px auto;
+  padding: 0 12px;
+}
+.card {
+  padding: 16px;
+  border: 1px solid var(--bd);
+  border-radius: 6px;
+  background: var(--card);
+}
+/* ---------- 5. FORMULARIOS ---------- */
+input {
+  width: 100%;
+  margin: 4px 0 12px;
+  padding: 8px;
+  border: 1px solid var(--bd);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+}
+/* Los radios Sí/No del checklist no deben ocupar el ancho completo */
+.mini {
+  width: auto;
+  margin: 0;
+}
+/* ---------- 6. BOTONES ---------- */
+/* .g y .l van después de .b para poder sobrescribir su fondo */
+.b {
+  margin: 4px 4px 0 0;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--ac);
+  color: #ffffff;
+  cursor: pointer;
+}
+.g {
+  background: var(--gris);
+}
+.l {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ac);
+  text-decoration: underline;
+  cursor: pointer;
+}
+/* ---------- 7. LISTAS DE CHEQUEO, TABLAS Y ESTADOS ---------- */
+.item {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--bd);
+}
+.no {
+  color: var(--no);
+  font-weight: bold;
+}
+.wrap {
+  overflow-x: auto;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+td,
+th {
+  padding: 6px;
+  border: 1px solid var(--bd);
+  text-align: left;
+}
+/* ---------- 8. UTILIDADES ---------- */
+/* Oculta/muestra las secciones; lo controla mostrar() en el script */
+.hide {
+  display: none;
+}
