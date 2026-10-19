@@ -116,6 +116,20 @@ function requiereAdmin(req, res, next) {
   next();
 }
 
+/* ---------- NÓMINA DE EMPLEADOS ----------
+   Los usuarios de conductor se atan al DNI de la tabla Empleados:
+   solo puede tener cuenta quien figura como "chofer" en la nómina */
+const buscarEmpleado = db.prepare('SELECT dni, nombre, apellido, cargo FROM Empleados WHERE dni = ?');
+const buscarUsuario = db.prepare('SELECT * FROM Usuarios WHERE dni = ?');
+function validarChofer(dni) {
+  const e = buscarEmpleado.get(dni);
+  if (!e) return { error: 'Ese DNI no figura en la nómina de empleados' };
+  if (String(e.cargo || '').trim().toLowerCase() !== 'chofer') {
+    return { error: 'Ese DNI no está registrado como chofer en la nómina' };
+  }
+  return { empleado: e };
+}
+
 app.post('/api/auth/registro', (req, res) => {
   const dni = String((req.body || {}).dni || '').trim();
   const pass = String((req.body || {}).pass || '');
@@ -125,7 +139,9 @@ app.post('/api/auth/registro', (req, res) => {
   if (pass.length < 6) {
     return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
   }
-  if (db.prepare('SELECT 1 FROM Usuarios WHERE dni = ?').get(dni)) {
+  const { error } = validarChofer(dni);
+  if (error) return res.status(403).json({ error });
+  if (buscarUsuario.get(dni)) {
     return res.status(409).json({ error: 'Ese DNI ya está registrado' });
   }
   try {
@@ -158,6 +174,42 @@ app.post('/api/auth/logout', requiereAuth, (req, res) => {
   db.prepare('DELETE FROM Sesiones WHERE token = ?')
     .run(String(req.headers.authorization || '').replace(/^Bearer /, ''));
   res.json({ ok: true });
+});
+
+/* ---------- GESTIÓN DE USUARIOS (solo admin) ---------- */
+/* Usuarios registrados, con el nombre y cargo que salen de Empleados (por DNI) */
+app.get('/api/usuarios', requiereAuth, requiereAdmin, (req, res) => {
+  try {
+    const filas = db.prepare(`
+      SELECT u.dni, u.rol, u.creado_en, e.nombre, e.apellido, e.cargo
+      FROM Usuarios u
+      LEFT JOIN Empleados e ON e.dni = u.dni
+      ORDER BY u.rol DESC, e.apellido, e.nombre
+    `).all();
+    res.json(filas);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* Alta de la cuenta de un chofer desde el panel de admin */
+app.post('/api/usuarios', requiereAuth, requiereAdmin, (req, res) => {
+  const dni = String((req.body || {}).dni || '').trim();
+  const pass = String((req.body || {}).pass || '');
+  if (pass.length < 6) {
+    return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+  }
+  const { error } = validarChofer(dni);
+  if (error) return res.status(403).json({ error });
+  if (buscarUsuario.get(dni)) {
+    return res.status(409).json({ error: 'Ese DNI ya tiene usuario' });
+  }
+  try {
+    db.prepare('INSERT INTO Usuarios (dni, pass_hash) VALUES (?, ?)').run(dni, hashear(pass));
+    res.json({ ok: true, dni, rol: 'conductor' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 /* =====================================================================

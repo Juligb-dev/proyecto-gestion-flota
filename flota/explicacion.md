@@ -36,7 +36,7 @@ cosas pasan por el **servidor**, que es quien tiene la base `Usuarios`:
 | Botón              | Qué hace                                                                 |
 |--------------------|--------------------------------------------------------------------------|
 | **Iniciar sesión** | Manda DNI y contraseña a `POST /api/auth/login`. El servidor busca el usuario, verifica el hash de la contraseña y devuelve un **token de sesión**. Si algo no coincide: "DNI o contraseña incorrectos". |
-| **Registrarme**    | Manda los datos a `POST /api/auth/registro`. El servidor valida el DNI (7 u 8 dígitos) y la contraseña (mínimo 6 caracteres), guarda al usuario con la contraseña **hasheada con scrypt** (nunca en texto plano) y te deja entrar directo. |
+| **Registrarme**    | Manda los datos a `POST /api/auth/registro`. El servidor valida que el DNI **exista en la nómina de `Empleados` con cargo "chofer"**, valida la contraseña (mínimo 6 caracteres), guarda al usuario con la contraseña **hasheada con scrypt** (nunca en texto plano) y te deja entrar directo. |
 
 El token que devuelve el servidor se guarda en el navegador y se manda en el
 header `Authorization: Bearer ...` en cada pedido. Si cerrás la pestaña y
@@ -49,8 +49,8 @@ Una vez que entrás aparece una barrita azul arriba. La arma el JavaScript solit
 (`armarNav()`) y los botones **dependen de quién sos**:
 
 - **Conductor normal:** "Nueva checklist" y "Salir".
-- **Admin:** además "Historial" y "Estadísticas" (solo si entraste con un
-  usuario de rol `admin`).
+- **Admin:** además "Historial", "Estadísticas" y "Usuarios" (solo si entraste
+  con un usuario de rol `admin`).
 
 Si tocás "Salir" se borra la sesión en el servidor (`POST /api/auth/logout`),
 se limpia el token del navegador y volvés al login.
@@ -136,6 +136,18 @@ Cuatro cosas:
 Sirve para ver qué es lo que más se rompe en la flota y qué conviene revisar primero.
 
 
+### Usuarios (solo admin)
+
+Muestra una tabla con las cuentas creadas (`DNI`, apellido y nombre, cargo,
+rol y fecha de alta) y debajo un formulario de **alta de chofer**: el desplegable
+lista solo los choferes de `Empleados` que todavía no tienen usuario, y el admin
+les define una contraseña inicial (mínimo 6 caracteres).
+
+Es el complemento del registro: el chofer puede crearse la cuenta solo desde el
+login (si su DNI figura como chofer en la nómina), o el admin se la crea sin que
+el chofer tenga que registrarse.
+
+
 ## 5. Dónde se guardan los datos
 
 ### El historial → en la base de datos (SQLite)
@@ -181,6 +193,9 @@ una checklist a medio cargar en la base.
   contraseña que manda el navegador con el mismo salt y se comparan.
 - `rol` es `conductor` o `admin`. El registro siempre crea conductores: el
   rol no se puede mandar desde el cliente.
+- Los usuarios de conductor **no están sueltos**: su `dni` tiene que existir en
+  `Empleados` con cargo "chofer". La tabla `Usuarios` no guarda nombre ni cargo;
+  se cruzan por `dni` (`LEFT JOIN Empleados`) cuando el admin los lista.
 - Cada inicio de sesión crea una fila en `Sesiones` con un token aleatorio
   que vence a los 7 días. "Salir" borra esa fila.
 
@@ -201,6 +216,9 @@ dni: admin    contraseña: admin123
 Se muestra ese aviso en la consola del servidor. En una versión real habría
 que cambiarla apenas se levanta el proyecto, o crear el admin con un script
 aparte.
+
+Desde el botón **"Usuarios"** el admin también puede dar de alta la cuenta de
+cualquier chofer de la nómina y ver quiénes ya la tienen.
 
 
 ## 7. Cómo está armado el CSS

@@ -20,6 +20,7 @@
       <button class="b" onclick="entrar()">Iniciar sesión</button>
       <button class="b g" onclick="registrar()">Registrarme</button>
       <p id="msg" class="no"></p>
+      <p class="ayuda">Solo los choferes de la nómina pueden registrarse.</p>
     </div>
     <!-- ===== PASO 1: datos del vehículo ===== -->
     <div id="p1" class="card hide">
@@ -59,6 +60,18 @@
       <h2>Estadísticas</h2>
       <div id="est"></div>
     </div>
+    <!-- ===== USUARIOS (solo admin) ===== -->
+    <div id="usr" class="card hide">
+      <h2>Usuarios y choferes</h2>
+      <div class="wrap" id="usrTabla"></div>
+      <h3 class="cat">Alta de chofer</h3>
+      <label>Chofer de la nómina</label>
+      <select id="usrChofer"></select>
+      <label>Contraseña inicial</label>
+      <input id="usrPass" type="password">
+      <button class="b" onclick="crearUsuario()">Crear usuario</button>
+      <p id="usrMsg" class="no"></p>
+    </div>
   </main>
 <script>
 /* =====================================================================
@@ -71,7 +84,7 @@ const ITEMS = [
   "Luces", "Frenos", "Neumáticos", "Espejos", "Combustible",
   "Documentación", "Botiquín", "Extintor", "Limpiaparabrisas", "Aceite y agua"
 ];
-const PAGES = ["login", "p1", "p2", "p3", "hist", "stats"];
+const PAGES = ["login", "p1", "p2", "p3", "hist", "stats", "usr"];
 let user = null, rol = null, cur = {};
 /* ---------- UTILIDADES ---------- */
 const $ = id => document.getElementById(id);
@@ -135,6 +148,7 @@ function armarNav() {
   if (rol === "admin") {
     h += '<button onclick="historial()">Historial</button>';
     h += '<button onclick="estadisticas()">Estadísticas</button>';
+    h += '<button onclick="usuarios()">Usuarios</button>';
   }
   h += '<button onclick="salir()">Salir</button>';
   $("nav").innerHTML = h;
@@ -277,6 +291,46 @@ async function estadisticas() {
   } catch (e) {
     $("est").innerHTML = `<p class="no">No se pudieron cargar las estadísticas: ${e.message}</p>`;
   }
+}
+
+/* ---------- USUARIOS (solo admin) ---------- */
+/* Tabla de cuentas registradas + alta de un chofer de la nómina */
+async function usuarios() {
+  mostrar("usr");
+  $("usrTabla").innerHTML = "<p>Cargando usuarios…</p>";
+  $("usrMsg").textContent = "";
+  try {
+    const [us, emps] = await Promise.all([api("/api/usuarios"), api("/api/empleados")]);
+    $("usrTabla").innerHTML =
+      "<table><tr><th>DNI</th><th>Apellido y nombre</th><th>Cargo</th>" +
+      "<th>Rol</th><th>Alta</th></tr>" +
+      us.map(u =>
+        `<tr><td>${u.dni}</td>` +
+        `<td>${u.nombre ? u.apellido + ", " + u.nombre : "—"}</td>` +
+        `<td>${u.cargo || "—"}</td><td>${u.rol}</td><td>${u.creado_en}</td></tr>`
+      ).join("") +
+      "</table>";
+    /* El select muestra solo los choferes que todavía no tienen cuenta */
+    const conUsuario = new Set(us.map(u => u.dni));
+    const libres = emps.filter(e =>
+      String(e.cargo || "").trim().toLowerCase() === "chofer" && !conUsuario.has(e.dni)
+    );
+    $("usrChofer").innerHTML = libres.length
+      ? libres.map(e => `<option value="${e.dni}">${e.apellido}, ${e.nombre} (${e.dni})</option>`).join("")
+      : '<option value="">No quedan choferes sin usuario</option>';
+  } catch (e) {
+    $("usrTabla").innerHTML = `<p class="no">No se pudieron cargar los usuarios: ${e.message}</p>`;
+  }
+}
+async function crearUsuario() {
+  const dni = $("usrChofer").value, pass = $("usrPass").value;
+  if (!dni) { $("usrMsg").textContent = "No hay choferes sin usuario"; return; }
+  if (pass.length < 6) { $("usrMsg").textContent = "La contraseña debe tener al menos 6 caracteres"; return; }
+  try {
+    await api("/api/usuarios", { method: "POST", body: JSON.stringify({ dni, pass }) });
+    $("usrPass").value = "";
+    usuarios();   // recarga la tabla y el select
+  } catch (e) { $("usrMsg").textContent = e.message; }
 }
 </script>
 </body>

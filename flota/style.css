@@ -78,7 +78,8 @@ main {
   background: var(--card);
 }
 /* ---------- 5. FORMULARIOS ---------- */
-input {
+input,
+select {
   width: 100%;
   margin: 4px 0 12px;
   padding: 8px;
@@ -127,6 +128,12 @@ input {
 }
 .wrap {
   overflow-x: auto;
+}
+/* Texto chico de ayuda debajo del login */
+.ayuda {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--gris);
 }
 table {
   width: 100%;
