@@ -30,12 +30,18 @@ proyecto-gestion-flota/
 
 ### Arranca en el login
 
-La primera pantalla pide **DNI** y **contraseña**. Tenés dos botones y un link:
-                                                
-------------------------------------------------------------|
-| **Iniciar sesión** | Busca si ese DNI+contraseña ya está guardado. Si está, entra. Si no, te dice "DNI o contraseña incorrectos". la idea seria tener un authenticator para detectar los login |
-| **Registrarme**  | Te crea al usuario con los datos que acabás de poner y entra directo. Si el DNI ya existe, te avisa. |
-| **Admin panel**  | Te pide una contraseña aparte. Si es correcta, entrás como admin. |
+La primera pantalla pide **DNI** y **contraseña**. Hay dos botones, y las dos
+cosas pasan por el **servidor**, que es quien tiene la base `Usuarios`:
+
+| Botón              | Qué hace                                                                 |
+|--------------------|--------------------------------------------------------------------------|
+| **Iniciar sesión** | Manda DNI y contraseña a `POST /api/auth/login`. El servidor busca el usuario, verifica el hash de la contraseña y devuelve un **token de sesión**. Si algo no coincide: "DNI o contraseña incorrectos". |
+| **Registrarme**    | Manda los datos a `POST /api/auth/registro`. El servidor valida el DNI (7 u 8 dígitos) y la contraseña (mínimo 6 caracteres), guarda al usuario con la contraseña **hasheada con scrypt** (nunca en texto plano) y te deja entrar directo. |
+
+El token que devuelve el servidor se guarda en el navegador y se manda en el
+header `Authorization: Bearer ...` en cada pedido. Si cerrás la pestaña y
+volvés a abrir la página, el script llama a `GET /api/auth/me` y si el token
+sigue vigente **retoma la sesión sin volver a loguearte** (dura 7 días).
 
 ### La barra de navegación
 
@@ -43,9 +49,11 @@ Una vez que entrás aparece una barrita azul arriba. La arma el JavaScript solit
 (`armarNav()`) y los botones **dependen de quién sos**:
 
 - **Conductor normal:** "Nueva checklist" y "Salir".
-- **Admin:** además "Historial" y "Estadísticas".
+- **Admin:** además "Historial" y "Estadísticas" (solo si entraste con un
+  usuario de rol `admin`).
 
-Si tocás "Salir" se borra la sesión, se limpia el formulario y volvés al login.
+Si tocás "Salir" se borra la sesión en el servidor (`POST /api/auth/logout`),
+se limpia el token del navegador y volvés al login.
 
 
 ### Paso 1 — Cargar vehículo
@@ -161,26 +169,38 @@ La página habla con el servidor por dos rutas:
 El guardado ocurre en una **transacción**: si falla a mitad de camino, no queda
 una checklist a medio cargar en la base.
 
-### Los usuarios → todavía en el navegador
+### Los usuarios → en el servidor, con hash
 
-Los usuarios siguen en el `localStorage` del navegador, con la llave `usuarios`
-(`{ dni, pass }`). Esto cambia en la próxima etapa del proyecto: va a pasar al
-servidor con contraseñas con hash y sesiones reales.
+| Tabla        | Columnas                                                         |
+|--------------|------------------------------------------------------------------|
+| `Usuarios`   | `id_usuario`, `dni`, `pass_hash`, `rol`, `creado_en`             |
+| `Sesiones`   | `token`, `id_usuario`, `creada_en`, `expira_en`                  |
+
+- `pass_hash` guarda `scrypt$salt$hash`: la contraseña **nunca se guarda ni
+  se transmite en texto plano**. Para verificar, se vuelve a hashear la
+  contraseña que manda el navegador con el mismo salt y se comparan.
+- `rol` es `conductor` o `admin`. El registro siempre crea conductores: el
+  rol no se puede mandar desde el cliente.
+- Cada inicio de sesión crea una fila en `Sesiones` con un token aleatorio
+  que vence a los 7 días. "Salir" borra esa fila.
 
 
-## 6. La contraseña del admin
+## 6. El admin
 
-Está escrita en el `index.html`, en la función `admin()`:
+Ya no hay una contraseña escrita en el código ni un botón "Admin panel" con
+`prompt()`. El admin es **un usuario real** en la tabla `Usuarios`, con
+`rol = 'admin'`, y entra por el mismo formulario de login que todos.
 
-```js
-if (c === "admin123") { ... }
+Al arrancar el servidor, si todavía no existe ningún admin se crea uno de
+arranque:
+
+```
+dni: admin    contraseña: admin123
 ```
 
-Es `admin123`. Se escribe en texto plano adentro del prompt del navegador.
-
-Sirve para mostrar el flujo, no para cuidar nada. Cualquiera que abra el código fuente
-de la página (clic derecho → "ver código") la ve. En una versión real esto tendría que
-vivir en un servidor, nunca en el HTML.
+Se muestra ese aviso en la consola del servidor. En una versión real habría
+que cambiarla apenas se levanta el proyecto, o crear el admin con un script
+aparte.
 
 
 ## 7. Cómo está armado el CSS
@@ -234,17 +254,19 @@ tiene que existir y coincidir con lo que busca el script.
 
 ## 9. Cosas a tener en cuenta
 
-- **Contraseñas en texto plano** dentro del `localStorage`. Se leen con abrir las
-  herramientas de desarrollo.
-- **El admin es una contraseña escrita en el código**, no un usuario real.(HARDCODE)
+- **El token de sesión vive en el `localStorage`**. Si alguien se queda con el
+  token (por ejemplo, en una compu compartida) puede usar la sesión hasta que
+  venza o hasta que se haga "Salir". Es el compromiso estándar de esta forma
+  de autenticación.
+- **El admin es un usuario real** con `rol = 'admin'` en la base. Ojo: el de
+  arranque es `admin` / `admin123` y está pensado solo para desarrollo.
 - **El historial ahora es común para todos**: lo que carga un chofer desde el
   celular lo ve el admin desde la compu. Antes cada navegador tenía el suyo.
 - **`innerHTML` con lo que escribe el usuario**: la patente y el DNI se inyectan directo
   en el HTML sin escapar. Con caracteres raros se rompe el dibujo de la pantalla.
-  pantalla. Si esto se usa de verdad, hay que escapar los textos o usar `textContent`.
+  Si esto se usa de verdad, hay que escapar los textos o usar `textContent`.
 - **No hay borrado de historial.** Una vez guardada una revisión, no se puede sacar desde
-  la interfaz. Habría que abrir las herramientas de desarrollo y borrar el `localStorage`
-  a mano.
+  la interfaz; habría que agregar un endpoint DELETE y un botón para el admin.
 
 
 ## 10. Ideas para seguir
@@ -255,4 +277,5 @@ tiene que existir y coincidir con lo que busca el script.
   vea de reojo en el auto.
 - **Poner un botón de volver arriba** cuando hay historial largo.
 - **Exportar a PDF** en vez de CSV, así el chofer se lleva el papel impreso.
-- **Sacar el admin a una contraseña con hash** y sumarle un límite de intentos.
+- **Sumarle un límite de intentos** al login (por ejemplo, bloquear 5 minutos
+  después de 3 contraseñas mal puestas).

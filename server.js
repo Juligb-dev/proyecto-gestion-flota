@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const Database = require('better-sqlite3');
 const path = require('path');
 
@@ -43,6 +44,123 @@ if (!columnasItems.some(c => c.name === 'categoria')) {
 }
 
 /* =====================================================================
+   AUTENTICACIÓN
+   - Usuarios: dni + contraseña hasheada con scrypt (nunca en texto plano)
+   - Sesiones: token aleatorio por pestaña, con vencimiento de 7 días
+   ===================================================================== */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS Usuarios (
+    id_usuario INTEGER PRIMARY KEY AUTOINCREMENT,
+    dni TEXT NOT NULL UNIQUE,
+    pass_hash TEXT NOT NULL,
+    rol TEXT NOT NULL DEFAULT 'conductor' CHECK(rol IN ('conductor', 'admin')),
+    creado_en TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  );
+
+  CREATE TABLE IF NOT EXISTS Sesiones (
+    token TEXT PRIMARY KEY,
+    id_usuario INTEGER NOT NULL,
+    creada_en TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    expira_en TEXT NOT NULL,
+    FOREIGN KEY(id_usuario) REFERENCES Usuarios(id_usuario) ON DELETE CASCADE
+  );
+`);
+/* Sesiones vencidas no sirven para nada: se borran al arrancar */
+db.prepare("DELETE FROM Sesiones WHERE expira_en <= datetime('now')").run();
+
+/* hashear(pass) → "scrypt$salt$hash"; verificar() vuelve a hashear y compara */
+function hashear(pass) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(pass, salt, 64).toString('hex');
+  return `scrypt$${salt}$${hash}`;
+}
+function verificar(pass, guardado) {
+  const [, salt, hash] = String(guardado).split('$');
+  const intento = crypto.scryptSync(pass, salt, 64).toString('hex');
+  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(intento, 'hex'));
+}
+
+const crearSesion = db.prepare(`
+  INSERT INTO Sesiones (token, id_usuario, expira_en)
+  VALUES (?, ?, datetime('now', '+7 days'))
+`);
+function abrirSesion(idUsuario) {
+  const token = crypto.randomBytes(32).toString('hex');
+  crearSesion.run(token, idUsuario);
+  return token;
+}
+
+/* Si todavía no hay ningún admin, se crea el inicial (dni: admin) */
+if (!db.prepare("SELECT 1 FROM Usuarios WHERE rol = 'admin'").get()) {
+  db.prepare("INSERT INTO Usuarios (dni, pass_hash, rol) VALUES (?, ?, 'admin')")
+    .run('admin', hashear('admin123'));
+  console.log("Usuario admin inicial creado → dni: admin, contraseña: admin123 (cambiala)");
+}
+
+/* Middleware: exige un token de sesión válido */
+function requiereAuth(req, res, next) {
+  const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
+  const sesion = db.prepare(`
+    SELECT u.dni, u.rol
+    FROM Sesiones s
+    JOIN Usuarios u ON u.id_usuario = s.id_usuario
+    WHERE s.token = ? AND s.expira_en > datetime('now')
+  `).get(token);
+  if (!sesion) return res.status(401).json({ error: 'No hay sesión iniciada o expiró' });
+  req.usuario = sesion;
+  next();
+}
+/* Middleware: además del token, pide rol admin */
+function requiereAdmin(req, res, next) {
+  if (req.usuario.rol !== 'admin') return res.status(403).json({ error: 'Requiere rol administrador' });
+  next();
+}
+
+app.post('/api/auth/registro', (req, res) => {
+  const dni = String((req.body || {}).dni || '').trim();
+  const pass = String((req.body || {}).pass || '');
+  if (!/^\d{7,8}$/.test(dni)) {
+    return res.status(400).json({ error: 'El DNI debe tener 7 u 8 dígitos' });
+  }
+  if (pass.length < 6) {
+    return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+  }
+  if (db.prepare('SELECT 1 FROM Usuarios WHERE dni = ?').get(dni)) {
+    return res.status(409).json({ error: 'Ese DNI ya está registrado' });
+  }
+  try {
+    /* El rol nunca viene del cliente: te registrás como conductor */
+    const { lastInsertRowid } = db.prepare('INSERT INTO Usuarios (dni, pass_hash) VALUES (?, ?)')
+      .run(dni, hashear(pass));
+    res.json({ token: abrirSesion(lastInsertRowid), dni, rol: 'conductor' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/login', (req, res) => {
+  const dni = String((req.body || {}).dni || '').trim();
+  const pass = String((req.body || {}).pass || '');
+  const u = db.prepare('SELECT * FROM Usuarios WHERE dni = ?').get(dni);
+  /* Mismo mensaje y mismo tiempo de respuesta si no existe el DNI o falla
+     la contraseña: así no se adivina qué DNIs están registrados */
+  if (!u || !verificar(pass, u.pass_hash)) {
+    return res.status(401).json({ error: 'DNI o contraseña incorrectos' });
+  }
+  res.json({ token: abrirSesion(u.id_usuario), dni: u.dni, rol: u.rol });
+});
+
+app.get('/api/auth/me', requiereAuth, (req, res) => {
+  res.json(req.usuario);
+});
+
+app.post('/api/auth/logout', requiereAuth, (req, res) => {
+  db.prepare('DELETE FROM Sesiones WHERE token = ?')
+    .run(String(req.headers.authorization || '').replace(/^Bearer /, ''));
+  res.json({ ok: true });
+});
+
+/* =====================================================================
    CHECKLISTS: el historial de la web vive en la base, no en el navegador
    ===================================================================== */
 const buscarCamion = db.prepare('SELECT id_camion FROM Camiones WHERE patente = ?');
@@ -73,8 +191,10 @@ const guardarChecklist = db.transaction((c) => {
   return lastInsertRowid;
 });
 
-app.post('/api/checklists', (req, res) => {
-  const { dni, patente, km, fecha, items } = req.body || {};
+app.post('/api/checklists', requiereAuth, (req, res) => {
+  const { patente, km, fecha, items } = req.body || {};
+  /* El DNI no viene del formulario: sale de la sesión activa */
+  const dni = req.usuario.dni;
   if (!dni || !patente || !km || !fecha) {
     return res.status(400).json({ error: 'Faltan datos del vehículo (DNI, patente, km o fecha)' });
   }
@@ -94,7 +214,7 @@ app.post('/api/checklists', (req, res) => {
   }
 });
 
-app.get('/api/checklists', (req, res) => {
+app.get('/api/checklists', requiereAuth, requiereAdmin, (req, res) => {
   try {
     const filas = db.prepare(`
       SELECT c.id_checklist, c.dni_conductor, c.km, c.fecha, cam.patente

@@ -20,8 +20,6 @@
       <button class="b" onclick="entrar()">Iniciar sesión</button>
       <button class="b g" onclick="registrar()">Registrarme</button>
       <p id="msg" class="no"></p>
-      <hr>
-      <button class="l" onclick="admin()">Admin panel</button>
     </div>
     <!-- ===== PASO 1: datos del vehículo ===== -->
     <div id="p1" class="card hide">
@@ -74,57 +72,67 @@ const ITEMS = [
   "Documentación", "Botiquín", "Extintor", "Limpiaparabrisas", "Aceite y agua"
 ];
 const PAGES = ["login", "p1", "p2", "p3", "hist", "stats"];
-let user = null, isAdmin = false, cur = {};
-/* ---------- ALMACENAMIENTO ---------- */
-function leer(k) {
-  try { return JSON.parse(localStorage.getItem(k)) || []; }
-  catch (e) { return []; }
-}
-function guardar(k, v) {
-  try { localStorage.setItem(k, JSON.stringify(v)); }
-  catch (e) { /* sin espacio o modo privado: se ignora */ }
-}
+let user = null, rol = null, cur = {};
 /* ---------- UTILIDADES ---------- */
 const $ = id => document.getElementById(id);
 /* Muestra una sección y oculta todas las demás */
 function mostrar(id) {
   PAGES.forEach(p => $(p).classList.toggle("hide", p !== id));
 }
-/* ---------- ACCESO Y USUARIOS ---------- */
-function registrar() {
-  const d = $("dni").value.trim(), p = $("pass").value;
-  if (!d || !p) { $("msg").textContent = "Completá DNI y contraseña"; return; }
-  const us = leer("usuarios");
-  if (us.find(u => u.dni === d)) { $("msg").textContent = "Ese DNI ya está registrado"; return; }
-  us.push({ dni: d, pass: p });
-  guardar("usuarios", us);
-  $("msg").textContent = "";
-  entrar();
+/* ---------- SESIONES (token en el navegador, sesión en el servidor) ---------- */
+function token() {
+  return localStorage.getItem("token") || "";
 }
-function entrar() {
-  const d = $("dni").value.trim(), p = $("pass").value;
-  if (!leer("usuarios").find(u => u.dni === d && u.pass === p)) {
-    $("msg").textContent = "DNI o contraseña incorrectos"; return;
-  }
-  user = d; isAdmin = false;
-  $("msg").textContent = "";
+/* Habla con la API del servidor: manda el token de sesión y traduce los
+   errores. Si algo falla, tira el error en castellano */
+async function api(ruta, op = {}) {
+  const h = { ...(op.headers || {}) };
+  if (token()) h.Authorization = "Bearer " + token();
+  if (op.body) h["Content-Type"] = "application/json";
+  let r;
+  try { r = await fetch(ruta, { ...op, headers: h }); }
+  catch (e) { throw new Error("No se pudo conectar con el servidor"); }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || "Error del servidor");
+  return d;
+}
+/* El historial entero desde la base de datos */
+async function obtenerHistorial() {
+  return api("/api/checklists");
+}
+/* Guarda el token que devuelve el servidor y entra a la app */
+function entrarSesion(r) {
+  localStorage.setItem("token", r.token);
+  user = r.dni; rol = r.rol;
+  $("msg").textContent = ""; $("dni").value = ""; $("pass").value = "";
   armarNav();
   nueva();
 }
-function admin() {
-  const c = prompt("Contraseña de administrador:");
-  if (c === "admin123") {
-    user = "ADMIN"; isAdmin = true;
-    armarNav();
-    historial();
-  } else if (c !== null) {
-    alert("Contraseña incorrecta");
-  }
+/* ---------- ACCESO Y USUARIOS ---------- */
+async function registrar() {
+  const d = $("dni").value.trim(), p = $("pass").value;
+  if (!d || !p) { $("msg").textContent = "Completá DNI y contraseña"; return; }
+  try {
+    const r = await api("/api/auth/registro", {
+      method: "POST", body: JSON.stringify({ dni: d, pass: p })
+    });
+    entrarSesion(r);
+  } catch (e) { $("msg").textContent = e.message; }
+}
+async function entrar() {
+  const d = $("dni").value.trim(), p = $("pass").value;
+  if (!d || !p) { $("msg").textContent = "Completá DNI y contraseña"; return; }
+  try {
+    const r = await api("/api/auth/login", {
+      method: "POST", body: JSON.stringify({ dni: d, pass: p })
+    });
+    entrarSesion(r);
+  } catch (e) { $("msg").textContent = e.message; }
 }
 /* Construye los botones de la barra superior según el rol */
 function armarNav() {
   let h = '<button onclick="nueva()">Nueva checklist</button>';
-  if (isAdmin) {
+  if (rol === "admin") {
     h += '<button onclick="historial()">Historial</button>';
     h += '<button onclick="estadisticas()">Estadísticas</button>';
   }
@@ -133,11 +141,24 @@ function armarNav() {
   $("nav").classList.remove("hide");
 }
 function salir() {
-  user = null; isAdmin = false;
+  /* Borra la sesión en el servidor y el token en el navegador */
+  api("/api/auth/logout", { method: "POST" }).catch(() => {});
+  localStorage.removeItem("token");
+  user = null; rol = null;
   $("nav").classList.add("hide");
   $("dni").value = ""; $("pass").value = "";
   mostrar("login");
 }
+/* Si la página arranca con un token guardado, retoma la sesión */
+(async function restaurarSesion() {
+  if (!token()) return;
+  try {
+    const u = await api("/api/auth/me");
+    user = u.dni; rol = u.rol;
+    armarNav();
+    nueva();
+  } catch (e) { localStorage.removeItem("token"); }
+})();
 /* ---------- CHECKLIST (pasos 1 a 3) ---------- */
 /* Paso 1: prepara el formulario y dibuja los ítems a controlar */
 function nueva() {
@@ -179,25 +200,11 @@ function resumen() {
   ).join("");
   mostrar("p3");
 }
-/* Habla con la API del servidor. Si algo falla, tira el error en castellano */
-async function api(ruta, op = {}) {
-  let r;
-  try { r = await fetch(ruta, op); }
-  catch (e) { throw new Error("No se pudo conectar con el servidor"); }
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.error || "Error del servidor");
-  return d;
-}
-/* El historial entero desde la base de datos */
-async function obtenerHistorial() {
-  return api("/api/checklists");
-}
 function guardarChecklist() {
   const items = valores().map((resultado, i) => ({ categoria: "", item: ITEMS[i], resultado }));
   api("/api/checklists", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...cur, items })
+    body: JSON.stringify({ patente: cur.patente, km: cur.km, fecha: cur.fecha, items })
   })
     .then(d => {
       alert("Checklist guardada (n° " + d.id + ")");
