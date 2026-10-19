@@ -7,17 +7,23 @@ Es una app para **checquear vehículos**. Un chofer carga los datos de su auto
 guarda el resultado. Después el **admin** puede ver todo: el historial de las revisiones,
 bajarlo a planilla (CSV) y ver estadísticas de las fallas.
 
- La info se guarda en el navegador del usuario con
-`localStorage`. Abrís el `index.html` y ya anda.
+El historial ya **no vive en el navegador**: se guarda en una base de datos
+SQLite (`RefrescoJunin.db`) por intermedio de un servidor Express (`server.js`).
+Para levantarlo hay que correr `npm start` (o `npm run dev`) y abrir
+<http://localhost:3000>.
 
 
 ## 2. Archivos del proyecto
 
 ```
-flota/
-├── index.html     ← toda la página: el HTML + el JavaScript adentro
-├── style.css      ← todos los estilos (colores, tamaños, modo oscuro)
-└── explicacion.md ← este archivo
+proyecto-gestion-flota/
+├── flota/                ← la página web
+│   ├── index.html        ← toda la página: el HTML + el JavaScript adentro
+│   ├── style.css         ← todos los estilos (colores, tamaños, modo oscuro)
+│   └── explicacion.md    ← este archivo
+├── server.js             ← servidor Express: la API y la base de datos
+├── RefrescoJunin.db      ← base SQLite con los datos de la flota
+└── package.json          ← dependencias (express, better-sqlite3)
 ```
 
 ## 3. Recorrida completa, paso a paso
@@ -124,23 +130,42 @@ Sirve para ver qué es lo que más se rompe en la flota y qué conviene revisar 
 
 ## 5. Dónde se guardan los datos
 
-Todo vive en el `localStorage` del navegador, con dos llaves:
+### El historial → en la base de datos (SQLite)
 
-| Llave       | Qué guarda                                                    |
-|-------------|---------------------------------------------------------------|
-| `usuarios`  | Lista de usuarios: `{ dni, pass }`                            |
-| `historial` | Lista de revisiones: `{ dni, patente, km, fecha, items[] }`    |
+Las tablas `Checklists` y `ChecklistItems` las creó León directamente en la
+base; el servidor solo las usa (y las crea si faltan, por si alguien clona el
+repo sin la base) y les agregó una columna `categoria` a `ChecklistItems`:
 
-Dos cosas importantes que conviene saber:
+| Tabla            | Columnas                                                          |
+|------------------|-------------------------------------------------------------------|
+| `Checklists`     | `id_checklist`, `id_camion`, `dni_conductor`, `km`, `fecha`       |
+| `ChecklistItems` | `id_item`, `id_checklist`, `item`, `resultado`, `categoria`       |
 
-- **Los datos son por navegador.** Si revisás la misma patente en el celu y en la compu,
-  no se ven entre sí. Cada dispositivo tiene su propia lista.
-- **Si borrás los datos del navegador o usás incógnito, se pierde todo.** No hay copia
-  en ningún lado. Para una demo o una práctica está bien; para producción, no.
+O sea: **una fila por revisión** en `Checklists` y **una fila por cada ítem
+tildado** en `ChecklistItems`, atadas por `id_checklist` con clave foránea
+(y `ON DELETE CASCADE`: si borrás la checklist, sus ítems se borran solos).
 
-El acceso a esas dos llaves está metido en dos funciones chiquitas, `leer()` y `guardar()`,
-envueltas en `try/catch` para que si el navegador bloquea el almacenamiento (modo
-privado, o sin espacio) la página no se rompa y siga andando.
+Detalle importante: `Checklists` no guarda la patente como texto sino
+`id_camion`, una clave foránea a la tabla `Camiones`. Si el chofer pone una
+patente que todavía no está en `Camiones`, **el server la registra
+automáticamente** (con la patente nada más; el resto de los datos se
+completan después).
+
+La página habla con el servidor por dos rutas:
+
+| Ruta                 | Qué hace                                                     |
+|----------------------|--------------------------------------------------------------|
+| `POST /api/checklists` | Guarda una checklist completa (cabecera + todos sus ítems) |
+| `GET /api/checklists`  | Devuelve todo el historial, con los ítems de cada revisión  |
+
+El guardado ocurre en una **transacción**: si falla a mitad de camino, no queda
+una checklist a medio cargar en la base.
+
+### Los usuarios → todavía en el navegador
+
+Los usuarios siguen en el `localStorage` del navegador, con la llave `usuarios`
+(`{ dni, pass }`). Esto cambia en la próxima etapa del proyecto: va a pasar al
+servidor con contraseñas con hash y sesiones reales.
 
 
 ## 6. La contraseña del admin
@@ -212,7 +237,8 @@ tiene que existir y coincidir con lo que busca el script.
 - **Contraseñas en texto plano** dentro del `localStorage`. Se leen con abrir las
   herramientas de desarrollo.
 - **El admin es una contraseña escrita en el código**, no un usuario real.(HARDCODE)
-- **Los datos son del navegador**, no hay nada compartido ni respaldado.
+- **El historial ahora es común para todos**: lo que carga un chofer desde el
+  celular lo ve el admin desde la compu. Antes cada navegador tenía el suyo.
 - **`innerHTML` con lo que escribe el usuario**: la patente y el DNI se inyectan directo
   en el HTML sin escapar. Con caracteres raros se rompe el dibujo de la pantalla.
   pantalla. Si esto se usa de verdad, hay que escapar los textos o usar `textContent`.

@@ -1,0 +1,14 @@
+{
+  "name": "flota-front",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "express": "^4.19.2",
+    "sqlite3": "^5.1.6"
+  }
+}

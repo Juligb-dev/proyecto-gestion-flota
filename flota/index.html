@@ -65,7 +65,8 @@
 <script>
 /* =====================================================================
    Chequeo de Flota - toda la lógica de la página.
-   Los datos se guardan en el navegador con localStorage.
+   El historial de checklists se guarda en el servidor (base SQLite)
+   mediante la API (/api/checklists).
    ===================================================================== */
 /* ---------- CONFIGURACIÓN ---------- */
 const ITEMS = [
@@ -178,65 +179,97 @@ function resumen() {
   ).join("");
   mostrar("p3");
 }
+/* Habla con la API del servidor. Si algo falla, tira el error en castellano */
+async function api(ruta, op = {}) {
+  let r;
+  try { r = await fetch(ruta, op); }
+  catch (e) { throw new Error("No se pudo conectar con el servidor"); }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || "Error del servidor");
+  return d;
+}
+/* El historial entero desde la base de datos */
+async function obtenerHistorial() {
+  return api("/api/checklists");
+}
 function guardarChecklist() {
-  const h = leer("historial");
-  h.push({ ...cur, items: valores() });
-  guardar("historial", h);
-  alert("Checklist guardada");
-  nueva();   // arranca una checklist nueva
+  const items = valores().map((resultado, i) => ({ categoria: "", item: ITEMS[i], resultado }));
+  api("/api/checklists", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...cur, items })
+  })
+    .then(d => {
+      alert("Checklist guardada (n° " + d.id + ")");
+      nueva();   // arranca una checklist nueva
+    })
+    .catch(e => alert("No se pudo guardar: " + e.message));
 }
 /* ---------- REPORTES (solo admin) ---------- */
-/* Tabla con todas las checklists guardadas */
-function historial() {
-  const h = leer("historial");
-  if (!h.length) {
-    $("tabla").innerHTML = "<p>Todavía no hay registros.</p>";
-  } else {
-    $("tabla").innerHTML =
-      "<table><tr><th>Fecha</th><th>DNI</th><th>Patente</th><th>Km</th>" +
-      ITEMS.map(n => `<th>${n}</th>`).join("") + "</tr>" +
-      h.map(r =>
-        `<tr><td>${r.fecha}</td><td>${r.dni}</td><td>${r.patente}</td><td>${r.km}</td>` +
-        r.items.map(x => `<td class="${x === "No" ? "no" : ""}">${x}</td>`).join("") +
-        "</tr>"
-      ).join("") +
-      "</table>";
-  }
+/* Tabla con todas las checklists guardadas (vienen de la base de datos) */
+async function historial() {
   mostrar("hist");
+  $("tabla").innerHTML = "<p>Cargando historial…</p>";
+  try {
+    const h = await obtenerHistorial();
+    if (!h.length) {
+      $("tabla").innerHTML = "<p>Todavía no hay registros.</p>";
+    } else {
+      $("tabla").innerHTML =
+        "<table><tr><th>Fecha</th><th>DNI</th><th>Patente</th><th>Km</th>" +
+        ITEMS.map(n => `<th>${n}</th>`).join("") + "</tr>" +
+        h.map(r =>
+          `<tr><td>${r.fecha}</td><td>${r.dni_conductor}</td><td>${r.patente}</td><td>${r.km}</td>` +
+          r.items.map(x => `<td class="${x.resultado === "No" ? "no" : ""}">${x.resultado}</td>`).join("") +
+          "</tr>"
+        ).join("") +
+        "</table>";
+    }
+  } catch (e) {
+    $("tabla").innerHTML = `<p class="no">No se pudo cargar el historial: ${e.message}</p>`;
+  }
 }
 /* Exporta el historial a un CSV compatible con Excel (; y BOM) */
-function csv() {
-  const h = leer("historial");
-  const filas = [["Fecha", "DNI", "Patente", "Km", ...ITEMS]]
-    .concat(h.map(r => [r.fecha, r.dni, r.patente, r.km, ...r.items]));
-  const texto = filas.map(f => f.map(c => '"' + c + '"').join(";")).join("\n");
-  const a = document.createElement("a");
-  a.href = "data:text/csv;charset=utf-8,\uFEFF" + encodeURIComponent(texto);
-  a.download = "historial_flota.csv";
-  a.click();
+async function csv() {
+  try {
+    const h = await obtenerHistorial();
+    const filas = [["Fecha", "DNI", "Patente", "Km", ...ITEMS]]
+      .concat(h.map(r => [r.fecha, r.dni_conductor, r.patente, r.km, ...r.items.map(x => x.resultado)]));
+    const texto = filas.map(f => f.map(c => '"' + c + '"').join(";")).join("\n");
+    const a = document.createElement("a");
+    a.href = "data:text/csv;charset=utf-8,\uFEFF" + encodeURIComponent(texto);
+    a.download = "historial_flota.csv";
+    a.click();
+  } catch (e) {
+    alert("No se pudo generar el CSV: " + e.message);
+  }
 }
 
 /* Totales, porcentaje con fallas y fallas por ítem */
-function estadisticas() {
-  const h = leer("historial");
-  if (!h.length) {
-    $("est").innerHTML = "<p>Todavía no hay datos.</p>";
-    mostrar("stats");
-    return;
-  }
-  const pats = new Set(h.map(r => r.patente)).size;
-  const conFallas = h.filter(r => r.items.includes("No")).length;
-  const pct = Math.round(conFallas / h.length * 100);
-  let t = `<p>Total de checklists: <b>${h.length}</b><br>` +
-          `Vehículos distintos: <b>${pats}</b><br>` +
-          `Checklists con alguna falla: <b>${conFallas}</b> (${pct}%)</p>` +
-          `<h3>Fallas por ítem</h3>`;
-  t += ITEMS.map((n, i) => {
-    const c = h.filter(r => r.items[i] === "No").length;
-    return `<div class="item"><span>${n}</span><span class="${c ? "no" : ""}">${c}</span></div>`;
-  }).join("");
-  $("est").innerHTML = t;
+async function estadisticas() {
   mostrar("stats");
+  $("est").innerHTML = "<p>Cargando estadísticas…</p>";
+  try {
+    const h = await obtenerHistorial();
+    if (!h.length) {
+      $("est").innerHTML = "<p>Todavía no hay datos.</p>";
+      return;
+    }
+    const pats = new Set(h.map(r => r.patente)).size;
+    const conFallas = h.filter(r => r.items.some(x => x.resultado === "No")).length;
+    const pct = Math.round(conFallas / h.length * 100);
+    let t = `<p>Total de checklists: <b>${h.length}</b><br>` +
+            `Vehículos distintos: <b>${pats}</b><br>` +
+            `Checklists con alguna falla: <b>${conFallas}</b> (${pct}%)</p>` +
+            `<h3>Fallas por ítem</h3>`;
+    t += ITEMS.map((n, i) => {
+      const c = h.filter(r => r.items[i] && r.items[i].resultado === "No").length;
+      return `<div class="item"><span>${n}</span><span class="${c ? "no" : ""}">${c}</span></div>`;
+    }).join("");
+    $("est").innerHTML = t;
+  } catch (e) {
+    $("est").innerHTML = `<p class="no">No se pudieron cargar las estadísticas: ${e.message}</p>`;
+  }
 }
 </script>
 </body>
