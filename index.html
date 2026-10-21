@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Chequeo de Flota</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Barra de navegación: se arma sola según el usuario (armarNav) -->
+  <nav id="nav" class="hide"></nav>
+  <main>
+    <!-- ===== LOGIN / REGISTRO ===== -->
+    <div id="login" class="card">
+      <h2>Chequeo de Flota</h2>
+      <label>DNI</label>
+      <input id="dni" inputmode="numeric">
+      <label>Contraseña</label>
+      <input id="pass" type="password">
+      <button class="b" onclick="entrar()">Iniciar sesión</button>
+      <button class="b g" onclick="registrar()">Registrarme</button>
+      <p id="msg" class="no"></p>
+      <p class="ayuda">Solo los choferes de la nómina pueden registrarse.</p>
+    </div>
+    <!-- ===== PASO 1: datos del vehículo ===== -->
+    <div id="p1" class="card hide">
+      <h2>Cargar vehículo</h2>
+      <label>DNI conductor</label>
+      <input id="vdni" disabled>
+      <label>Patente</label>
+      <input id="pat" placeholder="AB123CD">
+      <label>Kilometraje</label>
+      <input id="km" type="number">
+      <label>Fecha y hora</label>
+      <input id="fh" disabled>
+      <button class="b" onclick="guardarDatos()">Guardar datos y continuar</button>
+    </div>
+    <!-- ===== PASO 2: checklist de ítems ===== -->
+    <div id="p2" class="card hide">
+      <h2>Checklist</h2>
+      <div id="lista"></div>
+      <button class="b" onclick="resumen()">Ver resumen</button>
+    </div>
+    <!-- ===== PASO 3: resumen y guardado ===== -->
+    <div id="p3" class="card hide">
+      <h2>Resumen</h2>
+      <p id="datos"></p>
+      <div id="res"></div>
+      <button class="b g" onclick="mostrar('p2')">Volver</button>
+      <button class="b" onclick="guardarChecklist()">Guardar checklist</button>
+    </div>
+    <!-- ===== HISTORIAL (solo admin) ===== -->
+    <div id="hist" class="card hide">
+      <h2>Historial</h2>
+      <div class="wrap" id="tabla"></div>
+      <button class="b" onclick="csv()">Descargar CSV</button>
+    </div>
+    <!-- ===== ESTADÍSTICAS (solo admin) ===== -->
+    <div id="stats" class="card hide">
+      <h2>Estadísticas</h2>
+      <div id="est"></div>
+    </div>
+    <!-- ===== USUARIOS (solo admin) ===== -->
+    <div id="usr" class="card hide">
+      <h2>Usuarios y choferes</h2>
+      <div class="wrap" id="usrTabla"></div>
+      <h3 class="cat">Alta de chofer</h3>
+      <label>Chofer de la nómina</label>
+      <select id="usrChofer"></select>
+      <label>Contraseña inicial</label>
+      <input id="usrPass" type="password">
+      <button class="b" onclick="crearUsuario()">Crear usuario</button>
+      <p id="usrMsg" class="no"></p>
+    </div>
+  </main>
+<script>
+/* =====================================================================
+   Chequeo de Flota - toda la lógica de la página.
+   El historial de checklists se guarda en el servidor (base SQLite)
+   mediante la API (/api/checklists).
+   ===================================================================== */
+/* ---------- CONFIGURACIÓN ---------- */
+const ITEMS = [
+  "Luces", "Frenos", "Neumáticos", "Espejos", "Combustible",
+  "Documentación", "Botiquín", "Extintor", "Limpiaparabrisas", "Aceite y agua"
+];
+const PAGES = ["login", "p1", "p2", "p3", "hist", "stats", "usr"];
+let user = null, rol = null, cur = {};
+/* ---------- UTILIDADES ---------- */
+const $ = id => document.getElementById(id);
+/* Muestra una sección y oculta todas las demás */
+function mostrar(id) {
+  PAGES.forEach(p => $(p).classList.toggle("hide", p !== id));
+}
+/* ---------- SESIONES (token en el navegador, sesión en el servidor) ---------- */
+function token() {
+  return localStorage.getItem("token") || "";
+}
+/* Habla con la API del servidor: manda el token de sesión y traduce los
+   errores. Si algo falla, tira el error en castellano */
+async function api(ruta, op = {}) {
+  const h = { ...(op.headers || {}) };
+  if (token()) h.Authorization = "Bearer " + token();
+  if (op.body) h["Content-Type"] = "application/json";
+  let r;
+  try { r = await fetch(ruta, { ...op, headers: h }); }
+  catch (e) { throw new Error("No se pudo conectar con el servidor"); }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || "Error del servidor");
+  return d;
+}
+/* El historial entero desde la base de datos */
+async function obtenerHistorial() {
+  return api("/api/checklists");
+}
+/* Guarda el token que devuelve el servidor y entra a la app */
+function entrarSesion(r) {
+  localStorage.setItem("token", r.token);
+  user = r.dni; rol = r.rol;
+  $("msg").textContent = ""; $("dni").value = ""; $("pass").value = "";
+  armarNav();
+  nueva();
+}
+/* ---------- ACCESO Y USUARIOS ---------- */
+async function registrar() {
+  const d = $("dni").value.trim(), p = $("pass").value;
+  if (!d || !p) { $("msg").textContent = "Completá DNI y contraseña"; return; }
+  try {
+    const r = await api("/api/auth/registro", {
+      method: "POST", body: JSON.stringify({ dni: d, pass: p })
+    });
+    entrarSesion(r);
+  } catch (e) { $("msg").textContent = e.message; }
+}
+async function entrar() {
+  const d = $("dni").value.trim(), p = $("pass").value;
+  if (!d || !p) { $("msg").textContent = "Completá DNI y contraseña"; return; }
+  try {
+    const r = await api("/api/auth/login", {
+      method: "POST", body: JSON.stringify({ dni: d, pass: p })
+    });
+    entrarSesion(r);
+  } catch (e) { $("msg").textContent = e.message; }
+}
+/* Construye los botones de la barra superior según el rol */
+function armarNav() {
+  let h = '<button onclick="nueva()">Nueva checklist</button>';
+  if (rol === "admin") {
+    h += '<button onclick="historial()">Historial</button>';
+    h += '<button onclick="estadisticas()">Estadísticas</button>';
+    h += '<button onclick="usuarios()">Usuarios</button>';
+  }
+  h += '<button onclick="salir()">Salir</button>';
+  $("nav").innerHTML = h;
+  $("nav").classList.remove("hide");
+}
+function salir() {
+  /* Borra la sesión en el servidor y el token en el navegador */
+  api("/api/auth/logout", { method: "POST" }).catch(() => {});
+  localStorage.removeItem("token");
+  user = null; rol = null;
+  $("nav").classList.add("hide");
+  $("dni").value = ""; $("pass").value = "";
+  mostrar("login");
+}
+/* Si la página arranca con un token guardado, retoma la sesión */
+(async function restaurarSesion() {
+  if (!token()) return;
+  try {
+    const u = await api("/api/auth/me");
+    user = u.dni; rol = u.rol;
+    armarNav();
+    nueva();
+  } catch (e) { localStorage.removeItem("token"); }
+})();
+/* ---------- CHECKLIST (pasos 1 a 3) ---------- */
+/* Paso 1: prepara el formulario y dibuja los ítems a controlar */
+function nueva() {
+  $("vdni").value = user;
+  $("pat").value = "";
+  $("km").value = "";
+  $("fh").value = new Date().toLocaleString("es-AR");
+  cur = {};
+  $("lista").innerHTML = ITEMS.map((n, i) => `
+    <div class="item">
+      <span>${n}</span>
+      <span>
+        <label><input class="mini" type="radio" name="i${i}" value="Sí" checked> Sí</label>
+        <label><input class="mini" type="radio" name="i${i}" value="No"> No</label>
+      </span>
+    </div>`).join("");
+  mostrar("p1");
+}
+function guardarDatos() {
+  const pat = $("pat").value.trim().toUpperCase(), km = $("km").value;
+  if (!pat || !km) { alert("Completá patente y kilometraje"); return; }
+  cur = { dni: user, patente: pat, km: km, fecha: new Date().toLocaleString("es-AR") };
+  mostrar("p2");
+}
+/* Lee la opción elegida de cada ítem: ["Sí","No",...] */
+function valores() {
+  return ITEMS.map((n, i) => document.querySelector(`input[name=i${i}]:checked`).value);
+}
+/* Paso 3: muestra los datos cargados + las respuestas */
+function resumen() {
+  const v = valores();
+  $("datos").innerHTML =
+    `<b>Patente:</b> ${cur.patente}<br>` +
+    `<b>Km:</b> ${cur.km}<br>` +
+    `<b>Fecha:</b> ${cur.fecha}`;
+
+  $("res").innerHTML = ITEMS.map((n, i) =>
+    `<div class="item"><span>${n}</span><span class="${v[i] === "No" ? "no" : ""}">${v[i]}</span></div>`
+  ).join("");
+  mostrar("p3");
+}
+function guardarChecklist() {
+  const items = valores().map((resultado, i) => ({ categoria: "", item: ITEMS[i], resultado }));
+  api("/api/checklists", {
+    method: "POST",
+    body: JSON.stringify({ patente: cur.patente, km: cur.km, fecha: cur.fecha, items })
+  })
+    .then(d => {
+      alert("Checklist guardada (n° " + d.id + ")");
+      nueva();   // arranca una checklist nueva
+    })
+    .catch(e => alert("No se pudo guardar: " + e.message));
+}
+/* ---------- REPORTES (solo admin) ---------- */
+/* Tabla con todas las checklists guardadas (vienen de la base de datos) */
+async function historial() {
+  mostrar("hist");
+  $("tabla").innerHTML = "<p>Cargando historial…</p>";
+  try {
+    const h = await obtenerHistorial();
+    if (!h.length) {
+      $("tabla").innerHTML = "<p>Todavía no hay registros.</p>";
+    } else {
+      $("tabla").innerHTML =
+        "<table><tr><th>Fecha</th><th>DNI</th><th>Patente</th><th>Km</th>" +
+        ITEMS.map(n => `<th>${n}</th>`).join("") + "</tr>" +
+        h.map(r =>
+          `<tr><td>${r.fecha}</td><td>${r.dni_conductor}</td><td>${r.patente}</td><td>${r.km}</td>` +
+          r.items.map(x => `<td class="${x.resultado === "No" ? "no" : ""}">${x.resultado}</td>`).join("") +
+          "</tr>"
+        ).join("") +
+        "</table>";
+    }
+  } catch (e) {
+    $("tabla").innerHTML = `<p class="no">No se pudo cargar el historial: ${e.message}</p>`;
+  }
+}
+/* Exporta el historial a un CSV compatible con Excel (; y BOM) */
+async function csv() {
+  try {
+    const h = await obtenerHistorial();
+    const filas = [["Fecha", "DNI", "Patente", "Km", ...ITEMS]]
+      .concat(h.map(r => [r.fecha, r.dni_conductor, r.patente, r.km, ...r.items.map(x => x.resultado)]));
+    const texto = filas.map(f => f.map(c => '"' + c + '"').join(";")).join("\n");
+    const a = document.createElement("a");
+    a.href = "data:text/csv;charset=utf-8,\uFEFF" + encodeURIComponent(texto);
+    a.download = "historial_flota.csv";
+    a.click();
+  } catch (e) {
+    alert("No se pudo generar el CSV: " + e.message);
+  }
+}
+
+/* Totales, porcentaje con fallas y fallas por ítem */
+async function estadisticas() {
+  mostrar("stats");
+  $("est").innerHTML = "<p>Cargando estadísticas…</p>";
+  try {
+    const h = await obtenerHistorial();
+    if (!h.length) {
+      $("est").innerHTML = "<p>Todavía no hay datos.</p>";
+      return;
+    }
+    const pats = new Set(h.map(r => r.patente)).size;
+    const conFallas = h.filter(r => r.items.some(x => x.resultado === "No")).length;
+    const pct = Math.round(conFallas / h.length * 100);
+    let t = `<p>Total de checklists: <b>${h.length}</b><br>` +
+            `Vehículos distintos: <b>${pats}</b><br>` +
+            `Checklists con alguna falla: <b>${conFallas}</b> (${pct}%)</p>` +
+            `<h3>Fallas por ítem</h3>`;
+    t += ITEMS.map((n, i) => {
+      const c = h.filter(r => r.items[i] && r.items[i].resultado === "No").length;
+      return `<div class="item"><span>${n}</span><span class="${c ? "no" : ""}">${c}</span></div>`;
+    }).join("");
+    $("est").innerHTML = t;
+  } catch (e) {
+    $("est").innerHTML = `<p class="no">No se pudieron cargar las estadísticas: ${e.message}</p>`;
+  }
+}
+
+/* ---------- USUARIOS (solo admin) ---------- */
+/* Tabla de cuentas registradas + alta de un chofer de la nómina */
+async function usuarios() {
+  mostrar("usr");
+  $("usrTabla").innerHTML = "<p>Cargando usuarios…</p>";
+  $("usrMsg").textContent = "";
+  try {
+    const [us, emps] = await Promise.all([api("/api/usuarios"), api("/api/empleados")]);
+    $("usrTabla").innerHTML =
+      "<table><tr><th>DNI</th><th>Apellido y nombre</th><th>Cargo</th>" +
+      "<th>Rol</th><th>Alta</th></tr>" +
+      us.map(u =>
+        `<tr><td>${u.dni}</td>` +
+        `<td>${u.nombre ? u.apellido + ", " + u.nombre : "—"}</td>` +
+        `<td>${u.cargo || "—"}</td><td>${u.rol}</td><td>${u.creado_en}</td></tr>`
+      ).join("") +
+      "</table>";
+    /* El select muestra solo los choferes que todavía no tienen cuenta */
+    const conUsuario = new Set(us.map(u => u.dni));
+    const libres = emps.filter(e =>
+      String(e.cargo || "").trim().toLowerCase() === "chofer" && !conUsuario.has(e.dni)
+    );
+    $("usrChofer").innerHTML = libres.length
+      ? libres.map(e => `<option value="${e.dni}">${e.apellido}, ${e.nombre} (${e.dni})</option>`).join("")
+      : '<option value="">No quedan choferes sin usuario</option>';
+  } catch (e) {
+    $("usrTabla").innerHTML = `<p class="no">No se pudieron cargar los usuarios: ${e.message}</p>`;
+  }
+}
+async function crearUsuario() {
+  const dni = $("usrChofer").value, pass = $("usrPass").value;
+  if (!dni) { $("usrMsg").textContent = "No hay choferes sin usuario"; return; }
+  if (pass.length < 6) { $("usrMsg").textContent = "La contraseña debe tener al menos 6 caracteres"; return; }
+  try {
+    await api("/api/usuarios", { method: "POST", body: JSON.stringify({ dni, pass }) });
+    $("usrPass").value = "";
+    usuarios();   // recarga la tabla y el select
+  } catch (e) { $("usrMsg").textContent = e.message; }
+}
+</script>
+</body>
+</html>
